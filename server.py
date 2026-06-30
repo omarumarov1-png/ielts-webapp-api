@@ -19,6 +19,9 @@ CORS(app)  # разрешаем запросы из Telegram WebView
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 
+# ─── VIP — безлимитный Premium-доступ навсегда (синхронизировано с bot.py) ──
+VIP_IDS = {7383007115}
+
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 DB_FILE = "users.json"  # тот же файл, что использует bot.py
@@ -77,17 +80,26 @@ def update_user(uid: str, data: dict):
     save_db(db)
 
 def can_check(uid: str) -> bool:
+    if int(uid) in VIP_IDS:
+        return True
     u = get_user(uid)
     if u["paid"] and u["paid_checks"] > 0:
         return True
     return u["checks_used"] < u["free_limit"]
 
 def use_check(uid: str):
+    if int(uid) in VIP_IDS:
+        return  # VIP — проверки не расходуются
     u = get_user(uid)
     if u["paid"] and u["paid_checks"] > 0:
         update_user(uid, {"paid_checks": u["paid_checks"] - 1})
     else:
         update_user(uid, {"checks_used": u["checks_used"] + 1})
+
+def is_premium(uid: str) -> bool:
+    if int(uid) in VIP_IDS:
+        return True
+    return get_user(uid).get("premium", False)
 
 # ─── Промпт ─────────────────────────────────────────────────────
 PROMPT_CHECK = """Ты — строгий экзаменатор IELTS Writing Task 2. Оценивай честно.
@@ -127,6 +139,31 @@ GRA: X.X
 
 Не завышай оценки. Среднее эссе — 5.5–6.0."""
 
+PROMPT_POLISH = """Ты — опытный редактор IELTS эссе. Улучши эссе студента, сохранив его идеи и структуру.
+
+Задача:
+1. Улучши лексику — замени простые слова на академические синонимы
+2. Исправь грамматические ошибки
+3. Улучши связность — добавь/улучши linking words
+4. Сохрани оригинальную позицию и аргументы автора
+5. Не переписывай эссе настолько сложным языком, что оно перестанет звучать как текст этого студента — улучшения должны быть реалистичными, не выше уровня B2-C1
+
+ФОРМАТ ОТВЕТА:
+
+УЛУЧШЕННАЯ ВЕРСИЯ:
+
+[полный текст улучшенного эссе]
+
+ЧТО ИЗМЕНЕНО:
+- [изменение 1 — конкретно: "заменил X на Y потому что..."]
+- [изменение 2]
+- [изменение 3]
+
+ОЖИДАЕМЫЙ ПРИРОСТ БАЛЛА: +0.5 — +1.0
+
+ЧЕСТНО О ПОТОЛКЕ:
+Косметическая правка одного эссе поднимает балл, но не меняет фундаментальный уровень владения языком. Если для выхода на 8.0+ нужна более глубокая работа — над структурой аргументации, разнообразием грамматических конструкций, естественностью академического стиля — прямо скажи об этом и кратко укажи, что именно для этого нужно прорабатывать системно, а не за одну правку."""
+
 # ─── Эндпоинт: проверка эссе ────────────────────────────────────
 @app.route("/api/check", methods=["POST"])
 def check_essay():
@@ -159,16 +196,49 @@ def check_essay():
         use_check(uid)
 
         user = get_user(uid)
-        checks_left = user["paid_checks"] if user["paid"] else max(0, user["free_limit"] - user["checks_used"])
+        if int(uid) in VIP_IDS:
+            checks_left = "∞"
+        else:
+            checks_left = user["paid_checks"] if user["paid"] else max(0, user["free_limit"] - user["checks_used"])
 
         return jsonify({
             "result": result,
             "checks_left": checks_left,
-            "is_paid": user["paid"],
-            "is_premium": user.get("premium", False)
+            "is_paid": user["paid"] or int(uid) in VIP_IDS,
+            "is_premium": is_premium(uid)
         })
     except Exception as e:
         logger.error(f"API error: {e}")
+        return jsonify({"error": "server_error"}), 500
+
+# ─── Эндпоинт: улучшение эссе (только Premium/VIP) ──────────────
+@app.route("/api/polish", methods=["POST"])
+def polish_essay():
+    data = request.get_json(force=True)
+    init_data = data.get("initData", "")
+    essay = data.get("essay", "").strip()
+
+    user_data = verify_telegram_data(init_data)
+    if not user_data:
+        return jsonify({"error": "unauthorized"}), 401
+
+    uid = str(user_data.get("id"))
+    if not is_premium(uid):
+        return jsonify({"error": "premium_required"}), 403
+
+    if len(essay.split()) < 80:
+        return jsonify({"error": "too_short"}), 400
+
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2000,
+            system=PROMPT_POLISH,
+            messages=[{"role": "user", "content": f"Улучши это IELTS эссе:\n\n{essay}"}]
+        )
+        return jsonify({"result": response.content[0].text})
+    except Exception as e:
+        logger.error(f"Polish API error: {e}")
         return jsonify({"error": "server_error"}), 500
 
 # ─── Эндпоинт: статус пользователя ──────────────────────────────
@@ -183,12 +253,16 @@ def status():
 
     uid = str(user_data.get("id"))
     user = get_user(uid)
-    checks_left = user["paid_checks"] if user["paid"] else max(0, user["free_limit"] - user["checks_used"])
+    if int(uid) in VIP_IDS:
+        checks_left = "∞"
+    else:
+        checks_left = user["paid_checks"] if user["paid"] else max(0, user["free_limit"] - user["checks_used"])
 
     return jsonify({
         "checks_left": checks_left,
-        "is_paid": user["paid"],
-        "is_premium": user.get("premium", False),
+        "is_paid": user["paid"] or int(uid) in VIP_IDS,
+        "is_premium": is_premium(uid),
+        "is_vip": int(uid) in VIP_IDS,
         "name": user_data.get("first_name", "")
     })
 
