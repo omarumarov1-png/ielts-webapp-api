@@ -20,7 +20,7 @@ TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 
 # ─── VIP — безлимитный Premium-доступ навсегда (синхронизировано с bot.py) ──
-VIP_IDS = {7383007115}
+VIP_IDS = {7383007115, 388618523}
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
