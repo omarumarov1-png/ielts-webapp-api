@@ -3,6 +3,7 @@ import json
 import hmac
 import hashlib
 import logging
+import re
 from urllib.parse import parse_qsl
 from datetime import datetime
 
@@ -78,14 +79,32 @@ def get_user(uid: str) -> dict:
         db[uid] = {
             "checks_used": 0, "free_limit": 2,
             "paid": False, "premium": False, "paid_checks": 0,
-            "joined": datetime.now().isoformat()
+            "joined": datetime.now().isoformat(), "history": []
         }
+        save_db(db)
+    elif "history" not in db[uid]:
+        db[uid]["history"] = []
         save_db(db)
     return db[uid]
 
 def update_user(uid: str, data: dict):
     db = load_db()
     db[uid].update(data)
+    save_db(db)
+
+MAX_HISTORY = 20
+
+def add_history_entry(uid: str, essay: str, result: str, overall: float | None):
+    db = load_db()
+    entry = {
+        "ts": datetime.now().isoformat(),
+        "overall": overall,
+        "snippet": essay[:180] + ("…" if len(essay) > 180 else ""),
+        "result": result,
+    }
+    hist = db[uid].get("history", [])
+    hist.insert(0, entry)
+    db[uid]["history"] = hist[:MAX_HISTORY]
     save_db(db)
 
 def can_check(uid: str) -> bool:
@@ -204,6 +223,15 @@ def check_essay():
         result = extract_text(response)
         use_check(uid)
 
+        overall = None
+        m = re.search(r"ОБЩИЙ БАЛЛ:\s*([\d.]+)", result)
+        if m:
+            try:
+                overall = float(m.group(1))
+            except ValueError:
+                overall = None
+        add_history_entry(uid, essay, result, overall)
+
         user = get_user(uid)
         if int(uid) in VIP_IDS:
             checks_left = "∞"
@@ -274,6 +302,20 @@ def status():
         "is_vip": int(uid) in VIP_IDS,
         "name": user_data.get("first_name", "")
     })
+
+# ─── Эндпоинт: история проверок ──────────────────────────────
+@app.route("/api/history", methods=["POST"])
+def history():
+    data = request.get_json(force=True)
+    init_data = data.get("initData", "")
+
+    user_data = verify_telegram_data(init_data)
+    if not user_data:
+        return jsonify({"error": "unauthorized"}), 401
+
+    uid = str(user_data.get("id"))
+    user = get_user(uid)
+    return jsonify({"history": user.get("history", [])})
 
 @app.route("/api/health", methods=["GET"])
 def health():
