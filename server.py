@@ -187,7 +187,7 @@ def check_essay():
 
     try:
         response = client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-sonnet-5",
             max_tokens=1500,
             system=PROMPT_CHECK,
             messages=[{"role": "user", "content": f"Проверь IELTS Writing Task 2:\n\n{essay}"}]
@@ -231,7 +231,7 @@ def polish_essay():
 
     try:
         response = client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-sonnet-5",
             max_tokens=2000,
             system=PROMPT_POLISH,
             messages=[{"role": "user", "content": f"Улучши это IELTS эссе:\n\n{essay}"}]
