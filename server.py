@@ -24,6 +24,15 @@ VIP_IDS = {7383007115, 388618523}
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
+def extract_text(response):
+    """Pull the actual text out of a Claude response. Some responses lead
+    with a ThinkingBlock (no .text attribute) before the TextBlock — index
+    [0] alone will crash on those, so scan for the first real text block."""
+    for block in response.content:
+        if getattr(block, "type", None) == "text":
+            return block.text
+    return ""
+
 DB_FILE = "users.json"  # тот же файл, что использует bot.py
 
 # ─── Проверка подлинности запроса от Telegram ──────────────────
@@ -192,7 +201,7 @@ def check_essay():
             system=PROMPT_CHECK,
             messages=[{"role": "user", "content": f"Проверь IELTS Writing Task 2:\n\n{essay}"}]
         )
-        result = response.content[0].text
+        result = extract_text(response)
         use_check(uid)
 
         user = get_user(uid)
@@ -236,7 +245,7 @@ def polish_essay():
             system=PROMPT_POLISH,
             messages=[{"role": "user", "content": f"Улучши это IELTS эссе:\n\n{essay}"}]
         )
-        return jsonify({"result": response.content[0].text})
+        return jsonify({"result": extract_text(response)})
     except Exception as e:
         logger.error(f"Polish API error: {e}")
         return jsonify({"error": "server_error"}), 500
